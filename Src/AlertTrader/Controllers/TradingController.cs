@@ -87,46 +87,52 @@ namespace AlertTrader.Controllers
             return Ok();
         }
 
-        private static decimal GetAmountToBuy(string amountStr, WebCallResult<BinanceAccountInfo> accountInfo, WebCallResult<BinanceAveragePrice> avPrice)
+        private static decimal GetAmountToBuy(string amountStr, string ticker, WebCallResult<BinanceAccountInfo> accountInfo, WebCallResult<BinanceAveragePrice> avPrice)
         {
-            decimal quantity = 0;
-            if (amountStr.Contains("$"))
+            var balance = accountInfo.Data.Balances.FirstOrDefault(b => b.Asset == ticker.Substring(ticker.Length - 3, 3));
+            if (balance == null)
             {
-                var amountUsdt = decimal.Parse(amountStr.Replace("$", ""));
-                var usdtFreeBalance = accountInfo.Data.Balances.First(b => b.Asset == "USDT").Free;
-
-                if (usdtFreeBalance < amountUsdt)
-                {
-                    amountUsdt = usdtFreeBalance;
-                }
-
-                quantity = amountUsdt / avPrice.Data.Price;
+                balance = accountInfo.Data.Balances.FirstOrDefault(b => b.Asset == ticker.Substring(ticker.Length - 4, 4));
             }
 
-            return quantity;
+            if (balance == null || balance.Free <= 0M) return 0M;
+            var amount = decimal.Parse(amountStr.Replace("%", "").Replace("$", ""));
+
+            if (amountStr.Contains("%"))
+            {
+                return balance.Free * (amount / 100.0M);
+            }
+
+            if (balance.Free < amount)
+            {
+                amount = balance.Free;
+            }
+
+            return amount;
         }
 
         private decimal  GetAmountToSell(string amountStr, string ticker, WebCallResult<BinanceAccountInfo> accountInfo, WebCallResult<BinanceAveragePrice> avPrice)
         {
-            decimal quantity = 0;
-            if (amountStr.Contains("$"))
+            var balance = accountInfo.Data.Balances.FirstOrDefault(b => b.Asset == ticker.Substring(0, 3));
+            if (balance == null)
             {
-                var asset = ticker.Replace("USDT", "");
-                var amountUsdt = decimal.Parse(amountStr.Replace("$", ""));
-                var freeBalance = accountInfo.Data.Balances.First(b => b.Asset == asset).Free;
-                if (freeBalance <= 0M) return quantity;
-
-                var totalBalanceInUsdt = avPrice.Data.Price * freeBalance;
-
-                if (totalBalanceInUsdt < amountUsdt)
-                {
-                    amountUsdt = totalBalanceInUsdt;
-                }
-
-                quantity = amountUsdt / avPrice.Data.Price;
+                balance = accountInfo.Data.Balances.FirstOrDefault(b => b.Asset == ticker.Substring(0, 4));
             }
 
-            return quantity;
+            if (balance == null || balance.Free <= 0M) return 0M;
+            var amount = decimal.Parse(amountStr.Replace("%", "").Replace("$", ""));
+
+            if (amountStr.Contains("%"))
+            {
+                return balance.Free * (amount / 100.0M);
+            }
+
+            if (balance.Free < amount)
+            {
+                amount = balance.Free;
+            }
+
+            return amount;
         }
 
         [HttpGet]
