@@ -25,6 +25,11 @@ namespace AlertTrader.Controllers
         private readonly IConfiguration _configuration;
         private readonly ILogger<TradingController> _logger;
 
+        private readonly string[] TradingViewIps = 
+        {
+            "52.89.214.238", "34.212.75.30", "54.218.53.128", "52.32.178.7"
+        };
+
         public TradingController(ILogger<TradingController> logger, IConfiguration configuration)
         {
             _configuration = configuration;
@@ -34,11 +39,24 @@ namespace AlertTrader.Controllers
         [HttpPost]
         public async Task<IActionResult> Post()
         {
+            var ip = Request.HttpContext.Connection.RemoteIpAddress.ToString();
+
+            _logger.LogInformation($"Request received from {ip}");
+
+            if (!TradingViewIps.Contains(ip))
+            {
+                _logger.LogError("Request not received from TradingView");
+                return Ok();
+            }
+
             var rawRequestBody = await GetRawBodyAsync(Request);
 
             var headers = string.Join(',', Request.Headers.Select(x => $"{x.Key} = {x.Value}"));
 
             _lastResult = rawRequestBody + $"\n{headers}";
+
+            _logger.LogInformation($"Request received:\n{rawRequestBody}\n{headers}");
+
 
             try
             {
@@ -55,84 +73,143 @@ namespace AlertTrader.Controllers
                     ApiCredentials = new ApiCredentials(apiKey, secretKey)
                 });
 
-                WebCallResult<BinanceAveragePrice> avPrice;
-                if (ticker.EndsWith("USDT"))
+                var avPrice = await client.Spot.Market.GetCurrentAvgPriceAsync(ticker);
+                var accountInfo = await client.General.GetAccountInfoAsync();
+
+                if (ev.ToUpper() == "BUY")
                 {
-                    avPrice = await client.Spot.Market.GetCurrentAvgPriceAsync(ticker);
-                    var accountInfo = await client.General.GetAccountInfoAsync();
+                    var quantity = GetAmountToBuy(amountStr, ticker, accountInfo, avPrice, client);
 
-                    if (ev.ToUpper() == "BUY")
-                    {
-                        var quantity = GetAmountToBuy(amountStr, accountInfo, avPrice);
+                    if (quantity <= 0M) return Ok();
 
-                        if (quantity <= 0M) return Ok();
+                    _logger.LogInformation($"BUYING: {quantity} ({amountStr}) {ticker} @ {avPrice.Data.Price}");
+                    var res = await client.Spot.Order.PlaceOrderAsync(ticker, OrderSide.Buy, OrderType.Market, quantity);
+                    _logger.LogInformation($"Buy result: Success: {res.Success}");
+                }
+                else if (ev.ToUpper() == "SELL")
+                {
+                    var quantity = GetAmountToSell(amountStr, ticker, accountInfo, avPrice, client);
+                    if (quantity <= 0M) return Ok();
 
-
-                        var res = await client.Spot.Order.PlaceOrderAsync(ticker, OrderSide.Buy, OrderType.Market, quantity);
-                    }
-                    else if (ev.ToUpper() == "SELL")
-                    {
-                        var quantity = GetAmountToSell(amountStr, ticker, accountInfo, avPrice);
-                        if (quantity <= 0M) return Ok();
-
-                        var res = await client.Spot.Order.PlaceOrderAsync(ticker, OrderSide.Sell, OrderType.Market, quantity);
-                    }
+                    _logger.LogInformation($"SELLING: {quantity} ({amountStr}) {ticker} @ {avPrice.Data.Price}");
+                    var res = await client.Spot.Order.PlaceOrderAsync(ticker, OrderSide.Sell, OrderType.Market, quantity);
+                    _logger.LogInformation($"Sell result: Success: {res.Success}");
                 }
             }
             catch (Exception ex)
             {
                 _lastResult += $"\n{ex}";
+
+                _logger.LogError($"Exception: {ex}");
             }
 
             return Ok();
         }
 
-        private static decimal GetAmountToBuy(string amountStr, string ticker, WebCallResult<BinanceAccountInfo> accountInfo, WebCallResult<BinanceAveragePrice> avPrice)
+        private static decimal GetAmountToBuy(
+            string amountStr,
+            string ticker,
+            WebCallResult<BinanceAccountInfo> accountInfo,
+            WebCallResult<BinanceAveragePrice> avPrice,
+            BinanceClient client)
         {
-            var balance = accountInfo.Data.Balances.FirstOrDefault(b => b.Asset == ticker.Substring(ticker.Length - 3, 3));
-            if (balance == null)
+            // Get selling asset and selling asset balance
+            var sellingAsset = ticker.Substring(ticker.Length - 3, 3);
+            var sellingAssetBalance = accountInfo.Data.Balances.FirstOrDefault(b => b.Asset == sellingAsset);
+            if (sellingAssetBalance == null)
             {
-                balance = accountInfo.Data.Balances.FirstOrDefault(b => b.Asset == ticker.Substring(ticker.Length - 4, 4));
+                sellingAsset = ticker.Substring(ticker.Length - 4, 4);
+                sellingAssetBalance = accountInfo.Data.Balances.FirstOrDefault(b => b.Asset == sellingAsset);
             }
 
-            if (balance == null || balance.Free <= 0M) return 0M;
-            var amount = decimal.Parse(amountStr.Replace("%", "").Replace("$", ""));
+            if (sellingAssetBalance == null || sellingAssetBalance.Free <= 0M) return 0M;
+            var amountToBuy = decimal.Parse(amountStr.Replace("%", "").Replace("$", ""));
 
+            // % of available balance
             if (amountStr.Contains("%"))
             {
-                return balance.Free * (amount / 100.0M);
+                // Get amount to buy. E.g. ETHBTC - get amount of ETH that can be bought with the % of BTC
+                var sellingAssetAmount = sellingAssetBalance.Free * (amountToBuy / 100.0M);
+
+                // Convert the selling asset amount to the buying asset amount. E.g. using 1 BTC to buy 20 ETH
+                return sellingAssetAmount / avPrice.Data.Price;
             }
 
-            if (balance.Free < amount)
+            if (amountStr.Contains("$"))
             {
-                amount = balance.Free;
+                // Paired with USDT. E.g. BTCUSDT  56000
+                if (ticker.EndsWith("USDT"))
+                {
+                    // Convert $ amount to asset amount
+                    amountToBuy = amountToBuy / avPrice.Data.Price;
+                }
+                else
+                {
+                    // Get USDT price. e.g. BTCETH so get BTCUSDT
+                    var buyingAssetUsdtPrice = client.Spot.Market.GetCurrentAvgPrice($"{ticker.Replace(sellingAsset, "")}USDT");
+
+                    // Get asset amount
+                    amountToBuy = amountToBuy / buyingAssetUsdtPrice.Data.Price;
+                }
             }
 
-            return amount;
+            if (sellingAssetBalance.Free < amountToBuy)
+            {
+                amountToBuy = sellingAssetBalance.Free;
+            }
+
+            return amountToBuy;
         }
 
-        private decimal  GetAmountToSell(string amountStr, string ticker, WebCallResult<BinanceAccountInfo> accountInfo, WebCallResult<BinanceAveragePrice> avPrice)
+        private decimal GetAmountToSell(
+            string amountStr,
+            string ticker,
+            WebCallResult<BinanceAccountInfo> accountInfo,
+            WebCallResult<BinanceAveragePrice> avPrice,
+            BinanceClient client)
         {
-            var balance = accountInfo.Data.Balances.FirstOrDefault(b => b.Asset == ticker.Substring(0, 3));
-            if (balance == null)
+            // Get buying asset and selling asset balance
+            var sellingAsset = ticker.Substring(0, 3);
+            var sellingAssetBalance = accountInfo.Data.Balances.FirstOrDefault(b => b.Asset == sellingAsset);
+            if (sellingAssetBalance == null)
             {
-                balance = accountInfo.Data.Balances.FirstOrDefault(b => b.Asset == ticker.Substring(0, 4));
+                sellingAsset = ticker.Substring(0, 4);
+                sellingAssetBalance = accountInfo.Data.Balances.FirstOrDefault(b => b.Asset == sellingAsset);
             }
 
-            if (balance == null || balance.Free <= 0M) return 0M;
-            var amount = decimal.Parse(amountStr.Replace("%", "").Replace("$", ""));
+            if (sellingAssetBalance == null || sellingAssetBalance.Free <= 0M) return 0M;
+            var amountToSell = decimal.Parse(amountStr.Replace("%", "").Replace("$", ""));
 
+            // % of available balance
             if (amountStr.Contains("%"))
             {
-                return balance.Free * (amount / 100.0M);
+                return sellingAssetBalance.Free * (amountToSell / 100.0M);
             }
 
-            if (balance.Free < amount)
+            if (amountStr.Contains("$"))
             {
-                amount = balance.Free;
+                // Paired with USDT. E.g. BTCUSDT  56000
+                if (ticker.EndsWith("USDT"))
+                {
+                    // Convert $ amount to asset amount
+                    amountToSell = amountToSell / avPrice.Data.Price;
+                }
+                else
+                {
+                    // Get USDT price. e.g. BTCETH so get BTCUSDT
+                    var sellingAssetUsdtPrice = client.Spot.Market.GetCurrentAvgPrice($"{sellingAsset}USDT");
+
+                    // Get asset amount
+                    amountToSell = amountToSell / sellingAssetUsdtPrice.Data.Price;
+                }
             }
 
-            return amount;
+            if (sellingAssetBalance.Free < amountToSell)
+            {
+                amountToSell = sellingAssetBalance.Free;
+            }
+
+            return amountToSell;
         }
 
         [HttpGet]
