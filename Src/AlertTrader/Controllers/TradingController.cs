@@ -1,4 +1,5 @@
 ﻿using System;
+using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Text;
@@ -10,6 +11,7 @@ using Binance.Net.Objects.Spot.MarketData;
 using Binance.Net.Objects.Spot.SpotData;
 using CryptoExchange.Net.Authentication;
 using CryptoExchange.Net.Objects;
+using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.Extensions.Configuration;
@@ -24,16 +26,39 @@ namespace AlertTrader.Controllers
         private static string _lastResult;
         private readonly IConfiguration _configuration;
         private readonly ILogger<TradingController> _logger;
+        private IHostingEnvironment _environment;
+        private string _file;
+        private Dictionary<string, int> _steps = new Dictionary<string, int>();
+        private static object _stepsLock = new object();
 
         private readonly string[] TradingViewIps = 
         {
             "52.89.214.238", "34.212.75.30", "54.218.53.128", "52.32.178.7"
         };
 
-        public TradingController(ILogger<TradingController> logger, IConfiguration configuration)
+        public TradingController(ILogger<TradingController> logger, IConfiguration configuration, IHostingEnvironment environment)
         {
             _configuration = configuration;
             _logger = logger;
+            _environment = environment;
+            _file = Path.Combine(_environment.ContentRootPath, "Step.txt");
+            if (System.IO.File.Exists(_file))
+            {
+                lock (_stepsLock)
+                {
+                    _steps = System.IO.File.ReadLines(_file).ToDictionary(
+                        l => l.Split(',')[0],
+                        l => int.Parse(l.Split(',')[1]));
+                }
+            }
+        }
+
+        private void SaveStepsFile()
+        {
+            lock (_stepsLock)
+            {
+                System.IO.File.WriteAllLines(_file, _steps.Select(x => $"{x.Key},{x.Value}").ToArray());
+            }
         }
 
         [HttpPost]
@@ -43,7 +68,7 @@ namespace AlertTrader.Controllers
 
             _logger.LogInformation($"Request received from {ip}");
 
-            if (!TradingViewIps.Contains(ip))
+            if (!TradingViewIps.Contains(ip) && ip != "::1")
             {
                 _logger.LogError("Request not received from TradingView");
                 return Ok();
@@ -55,7 +80,7 @@ namespace AlertTrader.Controllers
 
             _lastResult = rawRequestBody + $"\n{headers}";
 
-            _logger.LogInformation($"Request received:\n{rawRequestBody}\n{headers}");
+            _logger.LogInformation($"Request received:\n{rawRequestBody}");
 
 
             try
@@ -64,6 +89,7 @@ namespace AlertTrader.Controllers
                 var ticker = reqDetails[0];
                 var ev = reqDetails[1];
                 var amountStr = reqDetails[2];
+                var stepStr = reqDetails.Length > 3 ? reqDetails[3] : string.Empty;
 
                 var apiKey = _configuration["BinanceAPIKey"];
                 var secretKey = _configuration["BinanceSecretKey"];
@@ -75,6 +101,37 @@ namespace AlertTrader.Controllers
 
                 var avPrice = await client.Spot.Market.GetCurrentAvgPriceAsync(ticker);
                 var accountInfo = await client.General.GetAccountInfoAsync();
+
+                // Check the step
+                if (!string.IsNullOrEmpty(stepStr))
+                {
+                    var step = int.Parse(stepStr);
+                    if (step > 1)
+                    {
+                        if (_steps.ContainsKey(ticker))
+                        {
+                            if (_steps[ticker] == step - 1)
+                            {
+                                _logger.LogInformation("Correct step");
+                                _steps[ticker] = step;
+                                SaveStepsFile();
+                            }
+                            else
+                            {
+                                _logger.LogInformation($"Request ignored as previous steps not executed (Current step: {_steps[ticker]}");
+                            }
+                        }
+                        else
+                        {
+                            _logger.LogInformation("Request ignored as previous steps not executed");
+                        }
+                    }
+                    else
+                    {
+                        _steps[ticker] = step;
+                        SaveStepsFile();
+                    }
+                }
 
                 if (ev.ToUpper() == "BUY")
                 {
