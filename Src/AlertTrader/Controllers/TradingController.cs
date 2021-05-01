@@ -10,6 +10,7 @@ using Binance.Net.Objects.Spot;
 using Binance.Net.Objects.Spot.MarketData;
 using Binance.Net.Objects.Spot.SpotData;
 using CryptoExchange.Net.Authentication;
+using CryptoExchange.Net.ExchangeInterfaces;
 using CryptoExchange.Net.Objects;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Http;
@@ -31,7 +32,7 @@ namespace AlertTrader.Controllers
         private Dictionary<string, int> _steps = new Dictionary<string, int>();
         private static object _stepsLock = new object();
 
-        private readonly string[] TradingViewIps = 
+        private readonly string[] TradingViewIps =
         {
             "52.89.214.238", "34.212.75.30", "54.218.53.128", "52.32.178.7"
         };
@@ -86,21 +87,8 @@ namespace AlertTrader.Controllers
             try
             {
                 var reqDetails = rawRequestBody.Split(',');
-                var ticker = reqDetails[0];
-                var ev = reqDetails[1];
-                var amountStr = reqDetails[2];
-                var stepStr = reqDetails.Length > 3 ? reqDetails[3] : string.Empty;
-
-                var apiKey = _configuration["BinanceAPIKey"];
-                var secretKey = _configuration["BinanceSecretKey"];
-
-                var client = new BinanceClient(new BinanceClientOptions
-                {
-                    ApiCredentials = new ApiCredentials(apiKey, secretKey)
-                });
-
-                var avPrice = await client.Spot.Market.GetCurrentAvgPriceAsync(ticker);
-                var accountInfo = await client.General.GetAccountInfoAsync();
+                var stepStr = reqDetails[0];
+                var ticker = reqDetails[1];
 
                 // Check the step
                 if (!string.IsNullOrEmpty(stepStr))
@@ -119,11 +107,13 @@ namespace AlertTrader.Controllers
                             else
                             {
                                 _logger.LogInformation($"Request ignored as previous steps not executed (Current step: {_steps[ticker]}");
+                                return Ok();
                             }
                         }
                         else
                         {
                             _logger.LogInformation("Request ignored as previous steps not executed");
+                            return Ok();
                         }
                     }
                     else
@@ -133,24 +123,34 @@ namespace AlertTrader.Controllers
                     }
                 }
 
+                if (reqDetails.Length <= 2) return Ok();
+                var ev = reqDetails[2];
+                if (string.IsNullOrEmpty(ev)) return Ok();
+
+                var amountStr = reqDetails[3];
+
+                var apiKey = _configuration["BinanceAPIKey"];
+                var secretKey = _configuration["BinanceSecretKey"];
+
+
+
+                var client = new BinanceClient(new BinanceClientOptions
+                {
+                    ApiCredentials = new ApiCredentials(apiKey, secretKey)
+                });
+
+                var avPrice = await client.Spot.Market.GetCurrentAvgPriceAsync(ticker);
+                var accountInfo = await client.General.GetAccountInfoAsync();
+                var symbols = await ((IExchangeClient)client).GetSymbolsAsync();
+
+                var symbol = (BinanceSymbol)symbols.Data.First(x => x.CommonName == ticker);
                 if (ev.ToUpper() == "BUY")
                 {
-                    var quantity = GetAmountToBuy(amountStr, ticker, accountInfo, avPrice, client);
-
-                    if (quantity <= 0M) return Ok();
-
-                    _logger.LogInformation($"BUYING: {quantity} ({amountStr}) {ticker} @ {avPrice.Data.Price}");
-                    var res = await client.Spot.Order.PlaceOrderAsync(ticker, OrderSide.Buy, OrderType.Market, quantity);
-                    _logger.LogInformation($"Buy result: Success: {res.Success}");
+                    await DoBuy(amountStr, ticker, accountInfo, avPrice, client, symbol);
                 }
                 else if (ev.ToUpper() == "SELL")
                 {
-                    var quantity = GetAmountToSell(amountStr, ticker, accountInfo, avPrice, client);
-                    if (quantity <= 0M) return Ok();
-
-                    _logger.LogInformation($"SELLING: {quantity} ({amountStr}) {ticker} @ {avPrice.Data.Price}");
-                    var res = await client.Spot.Order.PlaceOrderAsync(ticker, OrderSide.Sell, OrderType.Market, quantity);
-                    _logger.LogInformation($"Sell result: Success: {res.Success}");
+                    await DoSell(amountStr, ticker, accountInfo, avPrice, client, symbol);
                 }
             }
             catch (Exception ex)
@@ -161,6 +161,44 @@ namespace AlertTrader.Controllers
             }
 
             return Ok();
+        }
+
+        private async Task DoSell(string amountStr, string ticker, WebCallResult<BinanceAccountInfo> accountInfo, WebCallResult<BinanceAveragePrice> avPrice,
+            BinanceClient client, BinanceSymbol symbol)
+        {
+            var quantity = GetAmountToSell(amountStr, ticker, accountInfo, avPrice, client);
+            _logger.LogInformation($"Initial calculated quantity : {quantity}");
+
+            quantity = ((int) (quantity / symbol.LotSizeFilter.StepSize)) * symbol.LotSizeFilter.StepSize;
+            _logger.LogInformation($"Quantity with step size ({symbol.LotSizeFilter.StepSize}) applied: {quantity}");
+
+            if (quantity > 0M)
+            {
+                _logger.LogInformation($"SELLING: {quantity} ({amountStr}) {ticker} @ {avPrice.Data.Price}");
+                var res = await client.Spot.Order.PlaceOrderAsync(ticker, OrderSide.Sell, OrderType.Market,
+                    quantity);
+                _logger.LogInformation($"Sell result: Success: {res.Success} Error:{res.Error}");
+            }
+        }
+
+        private async Task DoBuy(string amountStr, string ticker, WebCallResult<BinanceAccountInfo> accountInfo, WebCallResult<BinanceAveragePrice> avPrice,
+            BinanceClient client, BinanceSymbol symbol)
+        {
+            var quantity = GetAmountToBuy(amountStr, ticker, accountInfo, avPrice, client);
+            _logger.LogInformation($"Initial calculated quantity : {quantity}");
+
+            // Round to precision
+            quantity = ((int) (quantity / symbol.LotSizeFilter.StepSize)) * symbol.LotSizeFilter.StepSize;
+            _logger.LogInformation($"Quantity with step size ({symbol.LotSizeFilter.StepSize}) applied: {quantity}");
+
+            if (quantity > 0M)
+            {
+                _logger.LogInformation($"BUYING: {quantity} ({amountStr}) {ticker} @ {avPrice.Data.Price}");
+                var res = await client.Spot.Order.PlaceOrderAsync(ticker, OrderSide.Buy, OrderType.Market,
+                    quantity);
+
+                _logger.LogInformation($"Buy result: Success: {res.Success} Error:{res.Error}");
+            }
         }
 
         private static decimal GetAmountToBuy(
