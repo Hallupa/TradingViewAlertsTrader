@@ -3,7 +3,7 @@
 This is a simple ASP.Net Core application to use any alerts from TradingView to create market buy/sell orders in Binance.
 
 ## Setting up alerts
-Below is a screenshot of a TradingView alert. The alert needs to point to where the site will be hosted (The source code will need to be published to a host e.g. Azure). The URL will be the host site '\Trading' e.g. https://hostingsite.com/Trading 
+Below is a screenshot of a TradingView alert. The alert needs to point to where the site will be hosted (The source code will need to be published to a host e.g. Azure). The URL will be the host site '/Trading' e.g. https://<HOSTSITE>/Trading
 ![Screenshot](https://github.com/Hallupa/TradingViewAlertsTrader/blob/main/Doc/Images/TradingView.png)
 
 To initiate the trade, the alert message will need to contain details of the trade. This will be in the format:
