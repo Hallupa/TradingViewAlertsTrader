@@ -241,16 +241,12 @@ namespace AlertTrader.Controllers
                 else
                 {
                     // Get USDT price. e.g. BTCETH so get BTCUSDT
-                    var buyingAssetUsdtPrice = client.Spot.Market.GetCurrentAvgPrice($"{ticker.Replace(sellingAsset, "")}USDT");
+                    var buyingAsset = ticker.Replace(sellingAsset, string.Empty);
+                    var buyingAssetUsdtPrice = client.Spot.Market.GetCurrentAvgPrice($"{buyingAsset}USDT");
 
                     // Get asset amount
                     amountToBuy = amountToBuy / buyingAssetUsdtPrice.Data.Price;
                 }
-            }
-
-            if (sellingAssetBalance.Free < amountToBuy)
-            {
-                amountToBuy = sellingAssetBalance.Free;
             }
 
             return amountToBuy;
