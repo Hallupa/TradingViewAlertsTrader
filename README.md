@@ -27,10 +27,10 @@ Below shows where a market has a false breakdown. The market wicks down - if a t
 ![Screenshot](https://github.com/Hallupa/TradingViewAlertsTrader/blob/main/Doc/Images/TradingView3.png)
 
 What would be better would be to have a way of detecting a breakdown, a pullback to resistance (Which was previous support) then a further drop such as this:
-![Screenshot](https://github.com/Hallupa/TradingViewAlertsTrader/blob/main/Doc/Images/TradingView2.png)
+![Screenshot](https://github.com/Hallupa/TradingViewAlertsTrader/blob/main/Doc/Images/TradingView1.png)
 
 This can be done using steps such as this:
-![Screenshot](https://github.com/Hallupa/TradingViewAlertsTrader/blob/main/Doc/Images/TradingView1.png)
+![Screenshot](https://github.com/Hallupa/TradingViewAlertsTrader/blob/main/Doc/Images/TradingView2.png)
 
 In this example the alerts would be (In order from top to bottom):
 1,BTCUSDT
