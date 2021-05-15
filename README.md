@@ -27,10 +27,10 @@ Below shows where a market has a false breakdown. The market wicks down - if a t
 ![Screenshot](https://github.com/Hallupa/TradingViewAlertsTrader/blob/main/Doc/Images/TradingView3.png)
 
 What would be better would be to have a way of detecting a breakdown, a pullback to resistance (Which was previous support) then a further drop such as this:
-![Screenshot](https://github.com/Hallupa/TradingViewAlertsTrader/blob/main/Doc/Images/TradingView2.png)
+![Screenshot](https://github.com/Hallupa/TradingViewAlertsTrader/blob/main/Doc/Images/TradingView1.png)
 
 This can be done using steps such as this:
-![Screenshot](https://github.com/Hallupa/TradingViewAlertsTrader/blob/main/Doc/Images/TradingView1.png)
+![Screenshot](https://github.com/Hallupa/TradingViewAlertsTrader/blob/main/Doc/Images/TradingView2.png)
 
 In this example the alerts would be (In order from top to bottom):
 1,BTCUSDT
@@ -41,4 +41,4 @@ Note that the alert doesn't need to have a buy/sell event, it can just be a step
 When setting these alerts up consider carefully how they are setup, e.g. should they trigger just once, on prices moving up, down, etc. Alerts in TradingView can be triggered multiple times - this application can't distinguish between them so could cause the same event to happen multiple times.
 
 # Disclaimer
-This project is a work in progress and experimental. If you use this, use it casefully. I can not be held responsible for any bugs or mistakes made when using it or any losses that an occur.
+This project is a work in progress and experimental. If you use this, use it casefully. I can not be held responsible for any bugs or mistakes when using it or any losses that an occur.
