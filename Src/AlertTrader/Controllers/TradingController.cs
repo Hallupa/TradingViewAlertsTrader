@@ -24,6 +24,7 @@ namespace AlertTrader.Controllers
     [Route("[controller]")]
     public class TradingController : ControllerBase
     {
+        private const int InsuffientBalanceError = -2010;
         private static string _lastResult;
         private readonly IConfiguration _configuration;
         private readonly ILogger<TradingController> _logger;
@@ -76,6 +77,7 @@ namespace AlertTrader.Controllers
             }
 
             var rawRequestBody = await GetRawBodyAsync(Request);
+            if (string.IsNullOrEmpty(rawRequestBody)) return Ok();
 
             var headers = string.Join(',', Request.Headers.Select(x => $"{x.Key} = {x.Value}"));
 
@@ -163,7 +165,8 @@ namespace AlertTrader.Controllers
             return Ok();
         }
 
-        private async Task DoSell(string amountStr, string ticker, WebCallResult<BinanceAccountInfo> accountInfo, WebCallResult<BinanceAveragePrice> avPrice,
+        private async Task DoSell(string amountStr, string ticker, WebCallResult<BinanceAccountInfo> accountInfo,
+            WebCallResult<BinanceAveragePrice> avPrice,
             BinanceClient client, BinanceSymbol symbol)
         {
             var quantity = GetAmountToSell(amountStr, ticker, accountInfo, avPrice, client);
@@ -172,12 +175,40 @@ namespace AlertTrader.Controllers
             quantity = ((int) (quantity / symbol.LotSizeFilter.StepSize)) * symbol.LotSizeFilter.StepSize;
             _logger.LogInformation($"Quantity with step size ({symbol.LotSizeFilter.StepSize}) applied: {quantity}");
 
-            if (quantity > 0M)
+            var attempts = 3;
+            while (attempts > 0 && quantity >= 0)
             {
+
                 _logger.LogInformation($"SELLING: {quantity} ({amountStr}) {ticker} @ {avPrice.Data.Price}");
                 var res = await client.Spot.Order.PlaceOrderAsync(ticker, OrderSide.Sell, OrderType.Market,
                     quantity);
                 _logger.LogInformation($"Sell result: Success: {res.Success} Error:{res.Error}");
+
+
+                if (res != null && res.Error != null && res.Error.Code == InsuffientBalanceError)
+                {
+                    // Try again will slightly smaller balance
+                    quantity = quantity * 0.999M;
+                    _logger.LogInformation($"Attempt 2 using quantity: {quantity}");
+                    res = await client.Spot.Order.PlaceOrderAsync(ticker, OrderSide.Sell, OrderType.Market,
+                        quantity);
+                    _logger.LogInformation($"Sell result: Success: {res.Success} Error:{res.Error}");
+
+                    if (res != null && res.Error != null && res.Error.Code == InsuffientBalanceError)
+                    {
+                        // Try again will slightly smaller balance
+                        quantity = quantity * 0.999M;
+                        quantity = ((int) (quantity / symbol.LotSizeFilter.StepSize)) * symbol.LotSizeFilter.StepSize;
+
+                        _logger.LogInformation($"Next attempt with {quantity}");
+                    }
+                    else
+                    {
+                        break;
+                    }
+
+                    attempts--;
+                }
             }
         }
 
@@ -191,13 +222,29 @@ namespace AlertTrader.Controllers
             quantity = ((int) (quantity / symbol.LotSizeFilter.StepSize)) * symbol.LotSizeFilter.StepSize;
             _logger.LogInformation($"Quantity with step size ({symbol.LotSizeFilter.StepSize}) applied: {quantity}");
 
-            if (quantity > 0M)
+            var attempts = 3;
+            while (attempts > 0 && quantity >= 0)
             {
                 _logger.LogInformation($"BUYING: {quantity} ({amountStr}) {ticker} @ {avPrice.Data.Price}");
                 var res = await client.Spot.Order.PlaceOrderAsync(ticker, OrderSide.Buy, OrderType.Market,
                     quantity);
 
                 _logger.LogInformation($"Buy result: Success: {res.Success} Error:{res.Error}");
+
+                if (res != null && res.Error != null && res.Error.Code == InsuffientBalanceError)
+                {
+                    // Try again will slightly smaller balance
+                    quantity = quantity * 0.999M;
+                    quantity = ((int)(quantity / symbol.LotSizeFilter.StepSize)) * symbol.LotSizeFilter.StepSize;
+
+                    _logger.LogInformation($"Next attempt with {quantity}");
+                }
+                else
+                {
+                    break;
+                }
+
+                attempts--;
             }
         }
 
